@@ -101,9 +101,12 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Start every task by opening the tracking workpad comment and bringing it up to date before doing new implementation work.
 - Spend extra effort up front on planning and verification design before implementation.
 - Reproduce first: always confirm the current behavior/issue signal before changing code so the fix target is explicit.
+- Treat every material architectural claim as an epistemic claim: record the observed evidence, inference, decision, and remaining uncertainty before implementation.
 - Treat the issue plus workpad as an executable task contract: desired change,
   current evidence, scope boundaries, acceptance criteria, validation, and
   unknowns must be explicit before coding.
+- For Sari/harness work, design from the runtime boundary inward. Do not let Codex, OpenCode, Claude Code, ACP, or any other RS-specific shape leak into the core abstraction unless the workpad justifies why the core primitive must exist.
+- Default Sari core implementation language is Elixir/OTP. Use Rust, TypeScript, or another runtime only behind an adapter/sidecar boundary when measured constraints or upstream SDK realities justify it in the workpad.
 - Keep branch history linear. Sync with `origin/main` by rebase or
   fast-forward only; do not introduce merge commits while updating a work
   branch.
@@ -120,6 +123,172 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 - Move status only when the matching quality bar is met.
 - Operate autonomously end-to-end unless blocked by missing requirements, secrets, or permissions.
 - Use the blocked-access escape hatch only for true external blockers (missing required tools/auth) after exhausting documented fallbacks.
+
+## Sari architecture contract
+
+Apply this section to every ticket that touches the harness abstraction, runtime adapters, monitoring, agent execution, or Codex/OpenCode/Claude Code compatibility.
+
+- Sari is the umbrella runtime. Codex app-server is one adapter and compatibility target, not the architecture.
+- Entr'acte/Symphony is the primary consumer. Codex is already fit because Entr'acte already consumes `codex app-server`; Sari succeeds when OpenCode, Claude Code, and future RS backends can be consumed through the same Entr'acte operational path.
+- "Support an RS like codex-app-server" means an external orchestrator can start/resume a session, send a turn, receive streamed normalized events, answer approvals/tool requests, inspect state, cancel work, and cleanly terminate the runtime without knowing which backend is underneath.
+- The Elixir/OTP core owns supervision, session and turn lifecycle, adapter process ownership, event normalization, approval routing, observability, retries, cancellation, and backpressure.
+- Backend-specific code belongs behind a runtime adapter boundary. New code should prefer names such as `runtime`, `backend`, `session`, `turn`, and `event`; use `codex` only for Codex-specific adapter code or compatibility tests.
+- Preserve a Codex app-server-compatible facade where existing orchestration needs it, but keep Sari's internal vocabulary backend-neutral.
+- Do not spend implementation effort "making Codex fit" except to extract conformance tests, preserve compatibility, or keep the existing Entr'acte path green.
+- Normalize all supported RS backends into stable Sari primitives:
+  - `RuntimeBackend`
+  - `RuntimeCapabilities`
+  - `Session`
+  - `Turn`
+  - `RuntimeEvent`
+  - `ToolCall`
+  - `CommandExecution`
+  - `FileChange`
+  - `ApprovalRequest`
+  - `TokenUsage`
+- A runtime adapter must explicitly declare unsupported capabilities instead of silently degrading behavior.
+- A runtime adapter must make process, transport, and stream ownership explicit: stdio JSON-RPC, HTTP/SSE, JSONL stream, ACP, MCP, or sidecar process.
+- A Sari core change must include a fake/deterministic backend test unless the ticket is documentation-only.
+- A backend adapter change must include either:
+  - a black-box proof against the real backend command/API, or
+  - a documented reason that the real backend could not run plus deterministic adapter tests that exercise the same protocol surface.
+- Do not introduce a Rust or TypeScript core scheduler. Rust is reserved for hardened protocol/process sidecars after evidence shows Elixir is the bottleneck. TypeScript is reserved for SDK-facing adapters where the upstream integration is materially safer through the upstream SDK.
+- When exploring a new RS backend, record these findings before design:
+  - launch/control surface,
+  - session/resume support,
+  - streaming/event support,
+  - tool and approval model,
+  - filesystem/command execution model,
+  - cancellation semantics,
+  - observability/token/cost data,
+  - security/sandbox controls,
+  - adapter gaps and risk.
+
+## Entr'acte consumption contract
+
+Use the Entr'acte/Symphony Codex app-server client as the concrete reference consumer. In the current Elixir implementation, Entr'acte launches the configured command in the issue workspace, speaks JSON-RPC over line-buffered stdio, and handles a bounded app-server subset.
+
+Required compatibility surface for a Sari facade consumed by Entr'acte:
+
+- Launch from the workflow command slot currently named `codex.command`, or from a future neutral runtime command slot that preserves the same operational behavior.
+- Start in the issue workspace selected by Entr'acte.
+- Accept `initialize` and the follow-up `initialized` notification.
+- Accept `thread/start` with working directory, approval policy, sandbox or permissions policy, and dynamic tool specifications.
+- Return a thread identifier that Entr'acte can reuse across continuation turns.
+- Accept `turn/start` with thread ID, text input, working directory, title, approval policy, and sandbox policy.
+- Stream JSON messages while the turn runs.
+- Produce a clear terminal turn event equivalent to `turn/completed`, `turn/failed`, or `turn/cancelled`.
+- Surface command/file/tool approvals as explicit requests that Entr'acte can approve, reject, auto-approve, or fail closed.
+- Support dynamic tool calls so Entr'acte can inject tools such as `linear_graphql`.
+- Preserve enough metadata for the dashboard and logs: runtime name, adapter name, backend process or server identity, thread ID, turn ID, last event, last message, timestamps, token/cost data when available, and worker host when remote.
+- Fail closed on malformed protocol messages, missing terminal events, unhandled approval requests, unsupported tools, and timeout.
+
+Implementation guidance:
+
+- Treat the existing Codex app-server client behavior in `Code/entracte` as the acceptance harness for Sari's compatibility facade.
+- Prefer first implementing Sari as a command that Entr'acte can run in place of `codex app-server`; this proves OpenCode/Claude Code compatibility without requiring Entr'acte orchestration changes.
+- Once the facade is proven, consider renaming configuration from `codex.*` to neutral `runtime.*`/`sari.*` in Entr'acte as a separate migration. Keep backward compatibility while doing so.
+- Do not require Entr'acte to know whether the backend is Codex, OpenCode, Claude Code, ACP, HTTP/SSE, or JSONL. That decision belongs in Sari configuration and adapter capabilities.
+- Entr'acte-facing compatibility tests should use a fake Sari backend first, then black-box tests for OpenCode and Claude Code when credentials and tools are available.
+
+## Target RS adapter context
+
+This context is intentionally in the workflow so unattended agents do not rediscover the same architecture facts. Verify upstream docs before relying on details that may have changed.
+
+### Codex app-server
+
+- Role in Sari: already-supported reference path through Entr'acte, compatibility fixture, and conformance baseline.
+- Shape: JSON-RPC over stdio, Unix socket, or WebSocket depending on launch options.
+- Sari responsibility: preserve compatibility where useful, but extract only stable cross-runtime primitives into core.
+- Do not copy Codex-only protocol details into `RuntimeBackend` unless OpenCode and Claude Code can map to them or the workpad justifies a deliberate optional capability.
+- Codex adapter work should usually be limited to conformance coverage, regression fixes, or proving that Sari did not break the existing Entr'acte path.
+
+### OpenCode
+
+Observed integration surfaces:
+
+- `opencode serve` starts a headless HTTP server for API access.
+- The server exposes OpenAPI documentation at `/doc`.
+- The server exposes server-sent events at `/global/event`.
+- The server exposes sessions, messages, async prompts, permissions, files, tools, MCP status, agents, logging, TUI control, auth, and VCS/path APIs.
+- `opencode run --format json` provides raw JSON events for non-interactive scripting.
+- `opencode run --attach http://localhost:<port>` can reuse a running server and avoid repeated cold starts.
+- `opencode acp` starts an Agent Client Protocol subprocess over stdio/JSON-RPC/nd-JSON.
+
+Adapter guidance:
+
+- Prefer an `OpenCodeHttp` adapter first when Sari needs observability, session control, permissions, and events.
+- Keep an `OpenCodeAcp` adapter as a protocol-compatibility path for future ACP-capable runtimes.
+- Treat `opencode run` as useful for smoke tests and compatibility probes, not as the primary long-running Sari integration when the HTTP server is available.
+- Track cold-start and hot-attach latency separately because they create different scaling profiles.
+- Keep prompt-path probes opt-in. Default profiling should measure startup, health, SSE, and session lifecycle without requiring provider credentials or spending model tokens.
+- Record which OpenCode permission responses are one-shot vs remembered and map that explicitly into Sari approval events.
+
+Official references:
+
+- https://opencode.ai/docs/cli/
+- https://dev.opencode.ai/docs/server/
+- https://opencode.ai/docs/acp/
+
+### Claude Code
+
+Observed integration surfaces:
+
+- `claude -p` runs non-interactively and exits.
+- `--output-format stream-json` emits machine-readable streaming output.
+- `--input-format stream-json` accepts streamed user turns over stdin.
+- `--include-hook-events` includes lifecycle hook events in the stream.
+- `--include-partial-messages` includes partial response chunks.
+- `--resume`, `--continue`, `--fork-session`, and `--session-id` support session continuity.
+- `--permission-prompt-tool` lets non-interactive permission prompts route through an MCP tool.
+- Hooks expose session, turn, tool, permission, compaction, file, cwd, notification, and other lifecycle events to command or HTTP handlers.
+
+Adapter guidance:
+
+- Prefer a `ClaudeCodeStreamJson` adapter that owns the subprocess, stdin/stdout JSONL parsing, cancellation, and final-result detection.
+- In the current Sari runtime contract, prefer one Claude Code subprocess per turn because the backend behaviour has no explicit `stop_session` callback. This avoids leaking resident ports. Move to a resident stream-json process only after session shutdown is part of the contract.
+- Use hooks and `--permission-prompt-tool` to recover event and approval fidelity that is native in Codex app-server.
+- Treat Claude Code as a powerful stream/process backend, not as a native app-server. Sari must own session bookkeeping, adapter state, timeout policy, and event normalization.
+- Capture the exact command, flags, settings source, MCP config, allowed/disallowed tools, and permission mode in adapter metadata.
+- Record unsupported semantics explicitly. For example, if a Codex app-server event has no Claude Code equivalent, emit a typed unsupported capability or degraded event rather than silently omitting it.
+
+Official references:
+
+- https://code.claude.com/docs/en/cli-reference
+- https://code.claude.com/docs/en/agent-sdk/streaming-output
+- https://code.claude.com/docs/en/hooks
+
+## USL scaling model for Sari
+
+Use the Universal Scaling Law as the default mental model for Sari concurrency work:
+
+```text
+C(N) = N / (1 + sigma * (N - 1) + kappa * N * (N - 1))
+Nmax = sqrt((1 - sigma) / kappa)
+```
+
+Definitions for Sari:
+
+- `N`: concurrent sessions, workers, backend processes, or load generators.
+- `C(N)`: completed useful turns per unit time, normalized to one worker.
+- `sigma`: contention cost from shared resources such as global queues, DB writes, log sinks, rate limits, shared approval brokers, or process table pressure.
+- `kappa`: coherency cost from cross-session coordination such as global state synchronization, broadcast fanout, shared mutable caches, lock-step supervision, or every adapter needing to observe every other adapter.
+
+Operational rules:
+
+- Do not assume that increasing `agent.max_concurrent_agents`, workers, ports, or adapter processes increases throughput.
+- Treat retrograde throughput as a diagnostic signal: if throughput drops as `N` grows, investigate coherency first, then contention.
+- Design Sari so most state is session-local and adapter-local. Core should coordinate by messages and immutable event snapshots, not shared mutable state.
+- Prefer sharded queues, per-session supervisors, bounded mailboxes, bounded event buffers, async observability ingestion, and explicit backpressure over global locks or synchronous broadcast paths.
+- Keep approval routing and observability out of the hot path where possible. If they must be in the path, measure their latency contribution separately.
+- For every concurrency or throughput ticket, collect steady-state measurements at several load levels before and after the change. At minimum record `N`, throughput, p50/p95 turn duration, queue wait, adapter startup time, event lag, mailbox depth or queue depth, error/retry rate, token/cost rate where available, CPU, memory, open file descriptors, and backend/API rate-limit signals.
+- Fit or reason about `sigma` and `kappa` qualitatively even when there is not enough data for a formal regression. The workpad must say whether the suspected bottleneck is contention, coherency, upstream rate limits, or local CPU/memory.
+- Pick default concurrency caps below the measured peak, not at the optimistic maximum.
+- If there are not enough stable data points, state that explicitly and keep the cap conservative.
+
+Reference:
+
+- https://teilo.xyz/collections/universal-scaling-law/
 
 ## Related skills
 
@@ -179,16 +348,18 @@ The agent should be able to talk to Linear, either via a configured Linear MCP s
 4.  Start work by writing/updating the `Task Contract` and a hierarchical plan in the workpad comment.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
     - Format: `<host>:<abs-workdir>@<short-sha>`
-    - Example: `devbox-01:/home/dev-user/code/sellerie-workspaces/SEL-32@7bdde33bc`
+    - Example: `devbox-01:/home/dev-user/code/sari-workspaces/SARI-32@7bdde33bc`
     - Do not include metadata already inferable from Linear issue fields (`issue ID`, `status`, `branch`, `PR link`).
 6.  Add explicit acceptance criteria and TODOs in checklist form in the same comment.
     - Fill `Task Contract` with desired outcome, current evidence/signal, in-scope work, out-of-scope work, validation contract, and unknowns.
+    - For Sari/harness work, include the runtime boundary, adapter surface, compatibility target, and non-goals explicitly.
     - If the issue is broad, ambiguous, or mixes unrelated outcomes, narrow it into an executable task contract before implementation.
     - If the contract cannot be narrowed without human product intent, move the issue to `Human Review` with a blocker brief instead of guessing.
     - If changes are user-facing, include a UI walkthrough acceptance criterion that describes the end-to-end user path to validate.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
 7.  Run a principal-style self-review of the plan and refine it in the comment.
+    - For Sari/harness work, the self-review must challenge whether the change belongs in core, adapter, config, protocol facade, or observability.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
 9.  Run the `pull` skill to rebase/fast-forward onto latest `origin/main` before any code edits, then record the sync result in the workpad `Notes`.
     - Include a `sync evidence` note with:
@@ -242,6 +413,7 @@ Use this only when completion is blocked by missing required tools or missing au
 5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
+    - For Sari/harness work, validate the normalized runtime contract with deterministic tests before relying on a real RS backend smoke test.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
@@ -302,6 +474,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - Branch is rebased or fast-forwarded onto latest `origin/main` with no merge commits introduced by the agent.
 - Required PR metadata is present (`symphony` label).
 - If app-touching, runtime validation/media requirements from `App runtime validation (required)` are complete.
+- If Sari/harness-touching, the workpad contains explicit evidence for the runtime boundary, adapter capabilities, unsupported capability behavior, and validation performed against fake and/or real backends.
 
 ## Guardrails
 
@@ -324,6 +497,7 @@ Use this only when completion is blocked by missing required tools or missing au
 - If state is terminal (`Done`), do nothing and shut down.
 - Keep issue text concise, specific, and reviewer-oriented.
 - If blocked and no workpad exists yet, add one blocker comment describing blocker, impact, and next unblock action.
+- Keep the `## Codex Workpad` marker until the runner and existing automation are migrated to a neutral marker. Sari work should still use this marker for compatibility.
 
 ## Workpad template
 
@@ -340,10 +514,39 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 
 - Desired outcome:
 - Current evidence/signal:
+- Runtime boundary:
+- Compatibility target:
 - In scope:
 - Out of scope:
 - Validation contract:
 - Unknowns:
+
+### Evidence and Decisions
+
+- Observed:
+- Inferred:
+- Decision:
+- Uncertainty:
+
+### Runtime Adapter Contract
+
+- Backend/runtime:
+- Transport/process shape:
+- Launch/control surface:
+- Session/resume semantics:
+- Event stream semantics:
+- Approval/tool semantics:
+- Filesystem/command semantics:
+- Unsupported/degraded capabilities:
+- Security/sandbox notes:
+
+### USL / Scaling Notes
+
+- Load unit `N`:
+- Expected contention (`sigma`) sources:
+- Expected coherency (`kappa`) sources:
+- Conservative concurrency cap:
+- Measurements planned or collected:
 
 ### Plan
 

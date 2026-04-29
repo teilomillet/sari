@@ -1,4 +1,4 @@
-# AGENTS.md instructions for sellerie
+# AGENTS.md instructions for Sari
 
 Always make sound and epistemic decisions by justifying them. Do not assume; check and verify.
 
