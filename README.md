@@ -2,6 +2,13 @@
 
 Harness app server playground for testing Entr'acte on a real repository.
 
+## Project Direction
+
+sellerie is a deliberately small repository for exercising Entr'acte and
+Symphony orchestration against real Linear and GitHub workflows. It should stay
+minimal and predictable so runner behavior, issue handoff, validation, and PR
+publishing can be tested without unrelated application complexity.
+
 ## Entr'acte runner
 
 The repo includes a portable runner profile:
