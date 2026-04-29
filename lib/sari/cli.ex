@@ -5,6 +5,8 @@ defmodule Sari.CLI do
 
   alias Sari.AppServer.Protocol
   alias Sari.Backend.{ClaudeCodeStreamJson, Fake, OpenCodeHttp}
+  alias Sari.Mcp.EntracteTools
+  alias Sari.RuntimePreset
 
   @spec main([String.t()]) :: :ok
   def main(["app-server" | args]) do
@@ -18,10 +20,15 @@ defmodule Sari.CLI do
     end
   end
 
+  def main(["mcp", "entracte-tools" | _args]) do
+    EntracteTools.run()
+  end
+
   def main(_args) do
     IO.puts(
       :stderr,
-      "usage: sari app-server [--backend fake|opencode_http|claude_code_stream_json] [backend options]"
+      "usage: sari app-server [--preset fake|opencode_lmstudio|claude_code] [--backend fake|opencode_http|claude_code_stream_json] [backend options]\n" <>
+        "       sari mcp entracte-tools"
     )
   end
 
@@ -30,6 +37,7 @@ defmodule Sari.CLI do
       OptionParser.parse(args,
         strict: [
           backend: :string,
+          preset: :string,
           base_url: :string,
           executable: :string,
           event_timeout_ms: :integer,
@@ -56,109 +64,144 @@ defmodule Sari.CLI do
         ]
       )
 
-    if invalid == [] do
-      with {:ok, backend} <-
-             backend_module(Keyword.get(opts, :backend) || env("SARI_BACKEND") || "fake") do
-        {:ok,
-         [
-           backend: backend,
-           backend_opts:
-             []
-             |> put_opt(
-               :executable,
-               Keyword.get(opts, :executable) || backend_env(backend, "EXECUTABLE")
-             )
-             |> put_opt(:base_url, Keyword.get(opts, :base_url) || env("SARI_OPENCODE_BASE_URL"))
-             |> put_opt(
-               :event_timeout_ms,
-               Keyword.get(opts, :event_timeout_ms) || env_int("SARI_OPENCODE_EVENT_TIMEOUT_MS")
-             )
-             |> put_opt(
-               :request_timeout_ms,
-               Keyword.get(opts, :request_timeout_ms) ||
-                 env_int("SARI_OPENCODE_REQUEST_TIMEOUT_MS")
-             )
-             |> put_opt(
-               :connect_timeout_ms,
-               Keyword.get(opts, :connect_timeout_ms) ||
-                 env_int("SARI_OPENCODE_CONNECT_TIMEOUT_MS")
-             )
-             |> put_opt(
-               :turn_timeout_ms,
-               Keyword.get(opts, :turn_timeout_ms) || backend_env_int(backend, "TURN_TIMEOUT_MS")
-             )
-             |> put_opt(
-               :max_events,
-               Keyword.get(opts, :max_events) || backend_env_int(backend, "MAX_EVENTS")
-             )
-             |> put_opt(
-               :context_limit_tokens,
-               Keyword.get(opts, :context_limit) ||
-                 backend_env_int(backend, "CONTEXT_LIMIT_TOKENS")
-             )
-             |> put_opt(
-               :reserved_output_tokens,
-               Keyword.get(opts, :reserved_output_tokens) ||
-                 backend_env_int(backend, "RESERVED_OUTPUT_TOKENS")
-             )
-             |> put_opt(:no_reply, Keyword.get(opts, :no_reply))
-             |> put_opt(:model, Keyword.get(opts, :model) || backend_env(backend, "MODEL"))
-             |> put_opt(
-               :permission_mode,
-               Keyword.get(opts, :permission_mode) || backend_env(backend, "PERMISSION_MODE")
-             )
-             |> put_opt(:tools, Keyword.get(opts, :tools) || backend_env(backend, "TOOLS"))
-             |> put_opt(
-               :allowed_tools,
-               Keyword.get(opts, :allowed_tools) || backend_env(backend, "ALLOWED_TOOLS")
-             )
-             |> put_opt(
-               :disallowed_tools,
-               Keyword.get(opts, :disallowed_tools) || backend_env(backend, "DISALLOWED_TOOLS")
-             )
-             |> put_opt(
-               :system_prompt,
-               Keyword.get(opts, :system_prompt) || backend_env(backend, "SYSTEM_PROMPT")
-             )
-             |> put_opt(
-               :append_system_prompt,
-               Keyword.get(opts, :append_system_prompt) ||
-                 backend_env(backend, "APPEND_SYSTEM_PROMPT")
-             )
-             |> put_opt(
-               :permission_prompt_tool,
-               Keyword.get(opts, :permission_prompt_tool) ||
-                 backend_env(backend, "PERMISSION_PROMPT_TOOL")
-             )
-             |> put_opt(:bare, opt_or_env(opts, :bare, backend_env_bool(backend, "BARE")))
-             |> put_opt(
-               :verbose,
-               opt_or_env(opts, :verbose, backend_env_bool(backend, "VERBOSE"))
-             )
-             |> put_opt(
-               :partial_messages,
-               opt_or_env(
-                 opts,
+    cond do
+      invalid != [] ->
+        {:error, "invalid options: #{inspect(invalid)}"}
+
+      Keyword.has_key?(opts, :preset) and Keyword.has_key?(opts, :backend) ->
+        {:error, "use either --preset or --backend, not both"}
+
+      true ->
+        with {:ok, backend, preset_backend_opts} <- backend_config(opts) do
+          {:ok,
+           [
+             backend: backend,
+             backend_opts:
+               preset_backend_opts
+               |> put_opt(
+                 :executable,
+                 Keyword.get(opts, :executable) || backend_env(backend, "EXECUTABLE")
+               )
+               |> put_opt(
+                 :base_url,
+                 Keyword.get(opts, :base_url) || env("SARI_OPENCODE_BASE_URL")
+               )
+               |> put_opt(
+                 :event_timeout_ms,
+                 Keyword.get(opts, :event_timeout_ms) || env_int("SARI_OPENCODE_EVENT_TIMEOUT_MS")
+               )
+               |> put_opt(
+                 :request_timeout_ms,
+                 Keyword.get(opts, :request_timeout_ms) ||
+                   env_int("SARI_OPENCODE_REQUEST_TIMEOUT_MS")
+               )
+               |> put_opt(
+                 :connect_timeout_ms,
+                 Keyword.get(opts, :connect_timeout_ms) ||
+                   env_int("SARI_OPENCODE_CONNECT_TIMEOUT_MS")
+               )
+               |> put_opt(
+                 :turn_timeout_ms,
+                 Keyword.get(opts, :turn_timeout_ms) ||
+                   backend_env_int(backend, "TURN_TIMEOUT_MS")
+               )
+               |> put_opt(
+                 :max_events,
+                 Keyword.get(opts, :max_events) || backend_env_int(backend, "MAX_EVENTS")
+               )
+               |> put_opt(
+                 :context_limit_tokens,
+                 Keyword.get(opts, :context_limit) ||
+                   backend_env_int(backend, "CONTEXT_LIMIT_TOKENS")
+               )
+               |> put_opt(
+                 :reserved_output_tokens,
+                 Keyword.get(opts, :reserved_output_tokens) ||
+                   backend_env_int(backend, "RESERVED_OUTPUT_TOKENS")
+               )
+               |> put_opt(:no_reply, Keyword.get(opts, :no_reply))
+               |> put_opt(:model, Keyword.get(opts, :model) || backend_env(backend, "MODEL"))
+               |> put_opt(
+                 :permission_mode,
+                 Keyword.get(opts, :permission_mode) || backend_env(backend, "PERMISSION_MODE")
+               )
+               |> put_opt(:tools, Keyword.get(opts, :tools) || backend_env(backend, "TOOLS"))
+               |> put_opt(
+                 :allowed_tools,
+                 Keyword.get(opts, :allowed_tools) || backend_env(backend, "ALLOWED_TOOLS")
+               )
+               |> put_opt(
+                 :disallowed_tools,
+                 Keyword.get(opts, :disallowed_tools) || backend_env(backend, "DISALLOWED_TOOLS")
+               )
+               |> put_opt(
+                 :system_prompt,
+                 Keyword.get(opts, :system_prompt) || backend_env(backend, "SYSTEM_PROMPT")
+               )
+               |> put_opt(
+                 :append_system_prompt,
+                 Keyword.get(opts, :append_system_prompt) ||
+                   backend_env(backend, "APPEND_SYSTEM_PROMPT")
+               )
+               |> put_opt(
+                 :permission_prompt_tool,
+                 Keyword.get(opts, :permission_prompt_tool) ||
+                   backend_env(backend, "PERMISSION_PROMPT_TOOL")
+               )
+               |> put_opt(:bare, opt_or_env(opts, :bare, backend_env_bool(backend, "BARE")))
+               |> put_opt(
+                 :verbose,
+                 opt_or_env(opts, :verbose, backend_env_bool(backend, "VERBOSE"))
+               )
+               |> put_opt(
                  :partial_messages,
-                 backend_env_bool(backend, "PARTIAL_MESSAGES")
+                 opt_or_env(
+                   opts,
+                   :partial_messages,
+                   backend_env_bool(backend, "PARTIAL_MESSAGES")
+                 )
                )
-             )
-             |> put_opt(
-               :hook_events,
-               opt_or_env(opts, :hook_events, backend_env_bool(backend, "HOOK_EVENTS"))
-             )
-             |> put_opt(
-               :dangerously_skip_permissions,
-               opt_or_env(
-                 opts,
+               |> put_opt(
+                 :hook_events,
+                 opt_or_env(opts, :hook_events, backend_env_bool(backend, "HOOK_EVENTS"))
+               )
+               |> put_opt(
                  :dangerously_skip_permissions,
-                 backend_env_bool(backend, "DANGEROUSLY_SKIP_PERMISSIONS")
+                 opt_or_env(
+                   opts,
+                   :dangerously_skip_permissions,
+                   backend_env_bool(backend, "DANGEROUSLY_SKIP_PERMISSIONS")
+                 )
                )
-             )
-         ]}
-      end
-    else
-      {:error, "invalid options: #{inspect(invalid)}"}
+           ]}
+        end
+    end
+  end
+
+  defp backend_config(opts) do
+    case Keyword.get(opts, :preset) || env("SARI_PRESET") do
+      preset when is_binary(preset) and preset != "" ->
+        preset_backend_config(preset)
+
+      _ ->
+        with {:ok, backend} <-
+               backend_module(Keyword.get(opts, :backend) || env("SARI_BACKEND") || "fake") do
+          {:ok, backend, []}
+        end
+    end
+  end
+
+  defp preset_backend_config(preset) do
+    case RuntimePreset.app_server_options(preset) do
+      {:ok, opts} ->
+        {:ok, Keyword.fetch!(opts, :backend), Keyword.get(opts, :backend_opts, [])}
+
+      {:error, {:external_reference_preset, preset_id}} ->
+        {:error,
+         "#{preset_id} is an external Entr'acte preset; run its command directly instead of `sari app-server --preset #{preset_id}`"}
+
+      {:error, reason} ->
+        {:error, "unsupported preset: #{inspect(reason)}"}
     end
   end
 

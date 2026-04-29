@@ -26,11 +26,17 @@ Use Sari as the merged Entr'acte app-server command with:
 agent:
   runner: app_server
 codex:
-  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --backend fake
+  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --preset fake
 ```
 
-Select OpenCode or Claude Code underneath Sari with `SARI_BACKEND` while keeping
-Entr'acte on `app_server`.
+Select OpenCode or Claude Code underneath Sari with runtime presets while
+keeping Entr'acte on `app_server`:
+
+```bash
+mix sari.presets
+mix sari.presets --preset opencode_lmstudio --format workflow
+mix sari.presets --preset claude_code --format workflow
+```
 
 Profile the current facade with:
 

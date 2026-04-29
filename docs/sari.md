@@ -195,7 +195,7 @@ Configure Sari as the merged Entr'acte app-server command:
 agent:
   runner: app_server
 codex:
-  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --backend fake
+  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --preset fake
 ```
 
 OpenCode through Sari:
@@ -204,7 +204,7 @@ OpenCode through Sari:
 agent:
   runner: app_server
 codex:
-  command: SARI_BACKEND=opencode_http SARI_OPENCODE_BASE_URL=http://127.0.0.1:41888 /Users/teilomillet/Code/sari/scripts/sari_app_server
+  command: SARI_OPENCODE_BASE_URL=http://127.0.0.1:41888 /Users/teilomillet/Code/sari/scripts/sari_app_server --preset opencode_lmstudio
 ```
 
 Claude Code through Sari:
@@ -213,7 +213,16 @@ Claude Code through Sari:
 agent:
   runner: app_server
 codex:
-  command: SARI_BACKEND=claude_code_stream_json /Users/teilomillet/Code/sari/scripts/sari_app_server
+  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --preset claude_code
+```
+
+Generate the same Entr'acte snippets from the checked-in preset registry:
+
+```bash
+mix sari.presets
+mix sari.presets --preset codex --format workflow
+mix sari.presets --preset opencode_lmstudio --format workflow
+mix sari.presets --preset claude_code --format workflow
 ```
 
 For a repeatable local smoke, start OpenCode with LM Studio and run the merged
@@ -269,6 +278,18 @@ Run only those fixtures with:
 ```bash
 mix test test/sari/app_server_contract_fixture_test.exs
 ```
+
+Runtime adapters also run through a deterministic conformance suite:
+
+```bash
+mix test test/sari/runtime_conformance_test.exs
+```
+
+That suite verifies each registered Sari backend exports the runtime callbacks,
+declares every known capability, gives an explicit reason for each degraded or
+unsupported capability, and emits a normalized turn stream with exactly one
+terminal event. Real backend smokes remain separate because they prove external
+transport, auth, and model behavior.
 
 The backend matrix is generated from the backend declarations plus the external
 Codex app-server reference row:

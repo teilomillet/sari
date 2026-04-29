@@ -1,8 +1,8 @@
 defmodule Sari.RuntimeCapabilitiesTest do
   use ExUnit.Case, async: true
 
-  alias Sari.RuntimeCapabilities
-  alias Sari.Backend.{ClaudeCodeStreamJson, OpenCodeHttp}
+  alias Sari.{RuntimeCapabilities, RuntimeConformance}
+  alias Sari.Backend.{ClaudeCodeStreamJson, Fake, OpenCodeHttp}
 
   test "declares required capabilities" do
     assert RuntimeCapabilities.required_capabilities() == [:sessions, :streaming_events]
@@ -37,6 +37,12 @@ defmodule Sari.RuntimeCapabilitiesTest do
     refute RuntimeCapabilities.fully_supports?(capabilities, :approvals)
     assert RuntimeCapabilities.unsupported_reason(capabilities, :approvals)
     assert RuntimeCapabilities.unsupported_reason(capabilities, :dynamic_tools)
+  end
+
+  test "runtime backends declare a complete Entr'acte-facing surface" do
+    assert :ok = RuntimeConformance.verify_backend(Fake)
+    assert :ok = RuntimeConformance.verify_backend(OpenCodeHttp)
+    assert :ok = RuntimeConformance.verify_backend(ClaudeCodeStreamJson)
   end
 end
 

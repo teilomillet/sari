@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+
+cd "$repo_root"
+export SARI_HOME="$repo_root"
+
+if [[ "${SARI_COMPILE:-1}" != "0" ]]; then
+  mix compile --quiet >&2
+fi
+
+exec mix run --no-compile -e 'Sari.CLI.main(["mcp", "entracte-tools" | System.argv()])' -- "$@"

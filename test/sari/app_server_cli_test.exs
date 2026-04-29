@@ -66,6 +66,41 @@ defmodule Sari.AppServer.CliTest do
     end
   end
 
+  test "sari app-server accepts fake runtime preset selection" do
+    port = start_cli_port(["--preset", "fake"])
+
+    try do
+      send_json(port, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => %{}})
+
+      assert %{
+               "id" => 1,
+               "result" => %{"capabilities" => %{"backend" => "fake"}}
+             } = recv_json(port)
+    after
+      close_port(port)
+    end
+  end
+
+  test "sari app-server accepts OpenCode runtime preset selection" do
+    port = start_cli_port(["--preset", "opencode_lmstudio"])
+
+    try do
+      send_json(port, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => %{}})
+
+      assert %{
+               "id" => 1,
+               "result" => %{
+                 "capabilities" => %{
+                   "backend" => "opencode_http",
+                   "metadata" => %{"context_limit_tokens" => 8192}
+                 }
+               }
+             } = recv_json(port)
+    after
+      close_port(port)
+    end
+  end
+
   test "sari app-server accepts explicit Claude Code backend selection" do
     port = start_cli_port(["--backend", "claude_code_stream_json"])
 
@@ -81,10 +116,51 @@ defmodule Sari.AppServer.CliTest do
     end
   end
 
-  defp start_cli_port(args \\ []) do
+  test "sari app-server accepts Claude Code preset selection" do
+    port = start_cli_port(["--preset", "claude_code"])
+
+    try do
+      send_json(port, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => %{}})
+
+      assert %{
+               "id" => 1,
+               "result" => %{"capabilities" => %{"backend" => "claude_code_stream_json"}}
+             } = recv_json(port)
+    after
+      close_port(port)
+    end
+  end
+
+  test "sari mcp entracte-tools speaks MCP over stdio" do
+    port = start_cli_port(["mcp", "entracte-tools"], trim_app_server?: false)
+
+    try do
+      send_json(port, %{"jsonrpc" => "2.0", "id" => 1, "method" => "initialize", "params" => %{}})
+
+      assert %{
+               "id" => 1,
+               "result" => %{"serverInfo" => %{"name" => "sari-entracte-tools"}}
+             } = recv_json(port)
+
+      send_json(port, %{"jsonrpc" => "2.0", "id" => 2, "method" => "tools/list"})
+
+      tools = recv_json(port) |> get_in(["result", "tools"])
+      assert Enum.any?(tools, &(&1["name"] == "linear_graphql"))
+    after
+      close_port(port)
+    end
+  end
+
+  defp start_cli_port(args \\ [], opts \\ []) do
     executable = System.find_executable("elixir") || flunk("elixir executable not found")
     code_path = Mix.Project.compile_path()
-    cli_args = ["app-server" | args]
+
+    cli_args =
+      if Keyword.get(opts, :trim_app_server?, true) do
+        ["app-server" | args]
+      else
+        args
+      end
 
     Port.open(
       {:spawn_executable, String.to_charlist(executable)},

@@ -5,6 +5,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 
 cd "$repo_root"
+export SARI_HOME="$repo_root"
 
 # Entr'acte launches the app-server command from each issue workspace. Compile
 # Sari from its own repo root first, and keep Mix chatter out of the protocol

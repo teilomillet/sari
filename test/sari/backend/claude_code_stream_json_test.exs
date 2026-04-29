@@ -101,6 +101,56 @@ defmodule Sari.Backend.ClaudeCodeStreamJsonTest do
     end)
   end
 
+  test "threads Entr'acte dynamic tools into Claude through MCP config" do
+    with_tmp(fn tmp ->
+      trace = Path.join(tmp, "claude.args")
+      fake_claude = fake_claude!(tmp, trace, :success)
+      fake_mcp = Path.join(tmp, "sari_mcp_entracte_tools")
+      File.write!(fake_mcp, "#!/bin/sh\n")
+      File.chmod!(fake_mcp, 0o755)
+
+      params = %{
+        "cwd" => tmp,
+        "dynamicTools" => [
+          %{"name" => "linear_graphql", "description" => "Linear", "inputSchema" => %{}}
+        ]
+      }
+
+      assert {:ok, session} =
+               Runtime.start_session(ClaudeCodeStreamJson, params,
+                 executable: fake_claude,
+                 entracte_mcp_command: fake_mcp
+               )
+
+      assert is_binary(session.metadata.mcp_config_path)
+      assert session.metadata.mcp_server == "entracte"
+      assert session.metadata.mcp_tools == ["linear_graphql"]
+
+      assert {:ok, result} =
+               Runtime.collect_turn(
+                 ClaudeCodeStreamJson,
+                 session,
+                 "use linear",
+                 executable: fake_claude,
+                 turn_id: "claude-turn-mcp",
+                 turn_timeout_ms: 1_000
+               )
+
+      assert result.terminal.type == :turn_completed
+
+      args = File.read!(trace)
+      assert args =~ "--mcp-config\n#{session.metadata.mcp_config_path}\n"
+      assert args =~ "--append-system-prompt\n"
+      assert args =~ "linear_graphql"
+
+      assert {:ok, config} =
+               session.metadata.mcp_config_path |> File.read!() |> Sari.Json.decode()
+
+      assert get_in(config, ["mcpServers", "entracte", "command"]) == fake_mcp
+      assert get_in(config, ["mcpServers", "entracte", "env", "SARI_COMPILE"]) == "0"
+    end)
+  end
+
   test "error result becomes a failed terminal event" do
     with_tmp(fn tmp ->
       trace = Path.join(tmp, "claude.args")

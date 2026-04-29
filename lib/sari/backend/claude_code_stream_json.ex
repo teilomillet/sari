@@ -21,7 +21,7 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
 
   import Bitwise, only: [band: 2, bor: 2]
 
-  alias Sari.{Json, RuntimeCapabilities, RuntimeError, RuntimeEvent, Session}
+  alias Sari.{EntracteMcpConfig, Json, RuntimeCapabilities, RuntimeError, RuntimeEvent, Session}
 
   @default_turn_timeout_ms 300_000
   @default_max_events 2_000
@@ -51,8 +51,11 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
         context_limit: :degraded
       },
       unsupported: %{
+        resume: :one_shot_process_resumes_by_session_id_only,
         approvals: :requires_permission_prompt_tool_or_hooks,
-        dynamic_tools: :requires_mcp_mapping,
+        dynamic_tools: :entracte_mcp_bridge_for_supported_tools,
+        cancellation: :kills_one_shot_subprocess_without_backend_side_interrupt,
+        cancel: :kills_one_shot_subprocess_without_backend_side_interrupt,
         resident_process: :requires_sari_stop_session_callback,
         approval_requests: :requires_permission_prompt_tool_or_hooks,
         context_limit: :configured_by_model_or_sari_context_limit_tokens
@@ -83,7 +86,8 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
   @impl true
   def start_session(params, opts \\ []) when is_map(params) do
     with {:ok, executable} <- executable(opts),
-         {:ok, cwd} <- session_cwd(params, opts) do
+         {:ok, cwd} <- session_cwd(params, opts),
+         {:ok, entracte_mcp} <- EntracteMcpConfig.maybe_write(params, opts) do
       session_id =
         opts
         |> Keyword.get(:session_id)
@@ -92,13 +96,15 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
       {:ok,
        Session.new(session_id, :claude_code_stream_json,
          cwd: cwd,
-         metadata: %{
-           backend: :claude_code_stream_json,
-           command: executable,
-           claude_session_id: session_id,
-           mode: "one_shot_stream_json",
-           resumed: false
-         }
+         metadata:
+           %{
+             backend: :claude_code_stream_json,
+             command: executable,
+             claude_session_id: session_id,
+             mode: "one_shot_stream_json",
+             resumed: false
+           }
+           |> Map.merge(entracte_mcp)
        )}
     end
   end
@@ -275,7 +281,8 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
     |> maybe_append_pair("--allowedTools", Keyword.get(state.opts, :allowed_tools))
     |> maybe_append_pair("--disallowedTools", Keyword.get(state.opts, :disallowed_tools))
     |> maybe_append_pair("--system-prompt", Keyword.get(state.opts, :system_prompt))
-    |> maybe_append_pair("--append-system-prompt", Keyword.get(state.opts, :append_system_prompt))
+    |> maybe_append_pair("--append-system-prompt", append_system_prompt(state))
+    |> maybe_append_pair("--mcp-config", Map.get(state.session.metadata, :mcp_config_path))
     |> maybe_append_pair(
       "--permission-prompt-tool",
       Keyword.get(state.opts, :permission_prompt_tool)
@@ -291,6 +298,19 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
   defp maybe_append_pair(args, _flag, nil), do: args
   defp maybe_append_pair(args, _flag, ""), do: args
   defp maybe_append_pair(args, flag, value), do: args ++ [flag, to_string(value)]
+
+  defp append_system_prompt(state) do
+    [
+      Keyword.get(state.opts, :append_system_prompt),
+      EntracteMcpConfig.default_system_prompt(state.session.metadata)
+    ]
+    |> Enum.reject(&blank?/1)
+    |> Enum.join("\n\n")
+  end
+
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(nil), do: true
+  defp blank?(_value), do: false
 
   defp append_session_args(args, %Session{} = session) do
     if Map.get(session.metadata, :resumed) == true or Map.get(session.metadata, "resumed") == true do

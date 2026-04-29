@@ -25,6 +25,24 @@ defmodule Sari.RuntimeCapabilities do
 
   @type support_value :: boolean() | :degraded
 
+  @all [
+    :sessions,
+    :resume,
+    :streaming_events,
+    :approvals,
+    :dynamic_tools,
+    :filesystem,
+    :command_execution,
+    :cancellation,
+    :token_usage,
+    :tool_calls,
+    :approval_requests,
+    :cost,
+    :cancel,
+    :workspace_mode,
+    :context_limit
+  ]
+
   @type t :: %__MODULE__{
           backend: atom(),
           name: String.t(),
@@ -44,6 +62,9 @@ defmodule Sari.RuntimeCapabilities do
             metadata: %{}
 
   @required [:sessions, :streaming_events]
+
+  @spec all_capabilities() :: [capability()]
+  def all_capabilities, do: @all
 
   @spec required_capabilities() :: [capability()]
   def required_capabilities, do: @required
