@@ -170,7 +170,8 @@ defmodule Sari.RuntimePreset do
       backend_opts: [
         context_limit_tokens: 200_000,
         reserved_output_tokens: 1_024,
-        turn_timeout_ms: 300_000
+        turn_timeout_ms: 300_000,
+        dangerously_skip_permissions: true
       ],
       runnable?: true,
       command: "#{script} --preset claude_code",

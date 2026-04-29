@@ -216,6 +216,18 @@ codex:
   command: /Users/teilomillet/Code/sari/scripts/sari_app_server --preset claude_code
 ```
 
+The Claude Code preset mirrors Entr'acte's Codex reference mode: it runs through
+the same `app_server` compatibility slot and sets Claude Code's
+`--dangerously-skip-permissions` flag through backend options. Use it only for
+trusted Entr'acte runners where the workflow already opts into running without
+the usual guardrails.
+
+When Entr'acte sends Codex-style `dynamicTools` during `thread/start`, Sari
+bridges the supported tools to Claude Code through a temporary local MCP config.
+The current bridge exposes `linear_graphql` and `gitlab_coverage`, so Claude Code
+can consume the same tracker and coverage primitives as the Codex app-server
+path without a manual project `.mcp.json`.
+
 Generate the same Entr'acte snippets from the checked-in preset registry:
 
 ```bash

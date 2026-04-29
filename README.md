@@ -38,6 +38,11 @@ mix sari.presets --preset opencode_lmstudio --format workflow
 mix sari.presets --preset claude_code --format workflow
 ```
 
+The Claude preset uses Claude Code's no-permission prompt mode to match the
+Entr'acte Codex reference runner, and Sari maps supported Entr'acte dynamic
+tools (`linear_graphql`, `gitlab_coverage`) into Claude Code through a local MCP
+bridge.
+
 Profile the current facade with:
 
 ```bash

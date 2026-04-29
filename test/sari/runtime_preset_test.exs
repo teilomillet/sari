@@ -43,7 +43,7 @@ defmodule Sari.RuntimePresetTest do
 
     assert claude_opts[:context_limit_tokens] == 200_000
     assert claude_opts[:turn_timeout_ms] == 300_000
-    refute Keyword.has_key?(claude_opts, :dangerously_skip_permissions)
+    assert claude_opts[:dangerously_skip_permissions] == true
   end
 
   test "formats workflow YAML for Entr'acte's app_server compatibility slot" do
