@@ -18,17 +18,18 @@ defmodule Sari.Backend.OpenCodeHttp do
 
   @behaviour Sari.RuntimeBackend
 
-  alias Sari.{Json, RuntimeCapabilities, RuntimeEvent, Session}
+  alias Sari.{Json, RuntimeCapabilities, RuntimeError, RuntimeEvent, Session}
 
   @default_base_url "http://127.0.0.1:4096"
   @default_event_path "/global/event"
   @default_connect_timeout_ms 1_000
   @default_request_timeout_ms 5_000
   @default_event_timeout_ms 30_000
+  @default_turn_timeout_ms 300_000
   @default_max_events 1_000
 
   @impl true
-  def capabilities(_opts \\ []) do
+  def capabilities(opts \\ []) do
     %RuntimeCapabilities{
       backend: :opencode_http,
       name: "OpenCode HTTP/SSE",
@@ -42,11 +43,20 @@ defmodule Sari.Backend.OpenCodeHttp do
         filesystem: true,
         command_execution: true,
         cancellation: true,
-        token_usage: :degraded
+        token_usage: :degraded,
+        tool_calls: true,
+        approval_requests: :degraded,
+        cost: false,
+        cancel: true,
+        workspace_mode: true,
+        context_limit: :degraded
       },
       unsupported: %{
         dynamic_tools: :requires_mapping_to_opencode_tools_or_mcp,
-        token_usage: :live_token_usage_needs_black_box_verification
+        token_usage: :live_token_usage_needs_black_box_verification,
+        approval_requests: :permission_request_mapping_needs_real_backend_verification,
+        cost: :not_reported_by_verified_lm_studio_probe,
+        context_limit: :configured_by_model_server_or_sari_context_limit_tokens
       },
       metadata: %{
         command: "opencode serve",
@@ -55,6 +65,7 @@ defmodule Sari.Backend.OpenCodeHttp do
           "https://dev.opencode.ai/docs/server/",
           "https://opencode.ai/docs/acp/"
         ],
+        context_limit_tokens: Keyword.get(opts, :context_limit_tokens),
         endpoints: %{
           docs: "/doc",
           events: @default_event_path,
@@ -170,6 +181,10 @@ defmodule Sari.Backend.OpenCodeHttp do
           base_url: base_url,
           event_path: Keyword.get(opts, :event_path, @default_event_path),
           event_timeout_ms: Keyword.get(opts, :event_timeout_ms, @default_event_timeout_ms),
+          turn_timeout_ms: Keyword.get(opts, :turn_timeout_ms, @default_turn_timeout_ms),
+          deadline_ms:
+            System.monotonic_time(:millisecond) +
+              Keyword.get(opts, :turn_timeout_ms, @default_turn_timeout_ms),
           max_events: Keyword.get(opts, :max_events, @default_max_events),
           request_opts: opts,
           session: session,
@@ -233,25 +248,37 @@ defmodule Sari.Backend.OpenCodeHttp do
   end
 
   defp next_turn_events(%{phase: :events} = state) do
-    case read_sse_event(state.sse, state.event_timeout_ms) do
-      {:ok, raw_event, sse} ->
-        {events, state} =
-          map_sse_event(raw_event, %{state | sse: sse, event_count: state.event_count + 1})
+    remaining_ms = state.deadline_ms - System.monotonic_time(:millisecond)
 
-        cond do
-          events == [] ->
-            {[], state}
+    cond do
+      remaining_ms <= 0 ->
+        _ = interrupt(state.session, state.turn_id, state.request_opts)
+        failed = turn_failed_event(state, :turn_timeout)
+        {[failed], %{state | phase: :done}}
 
-          Enum.any?(events, &RuntimeEvent.terminal?/1) ->
-            {events, %{state | phase: :done}}
+      true ->
+        read_timeout_ms = min(state.event_timeout_ms, remaining_ms)
 
-          true ->
-            {events, state}
+        case read_sse_event(state.sse, read_timeout_ms) do
+          {:ok, raw_event, sse} ->
+            {events, state} =
+              map_sse_event(raw_event, %{state | sse: sse, event_count: state.event_count + 1})
+
+            cond do
+              events == [] ->
+                {[], state}
+
+              Enum.any?(events, &RuntimeEvent.terminal?/1) ->
+                {events, %{state | phase: :done}}
+
+              true ->
+                {events, state}
+            end
+
+          {:error, reason, sse} ->
+            failed = turn_failed_event(%{state | sse: sse}, reason)
+            {[failed], %{state | phase: :done, sse: sse}}
         end
-
-      {:error, reason, sse} ->
-        failed = turn_failed_event(%{state | sse: sse}, reason)
-        {[failed], %{state | phase: :done, sse: sse}}
     end
   end
 
@@ -325,7 +352,9 @@ defmodule Sari.Backend.OpenCodeHttp do
   end
 
   defp turn_failed_event(state, reason) do
-    RuntimeEvent.new(:turn_failed, %{reason: reason},
+    error = RuntimeError.normalize(reason, backend: :opencode_http, stage: :turn)
+
+    RuntimeEvent.new(:turn_failed, RuntimeError.to_payload(error),
       session_id: state.session.id,
       turn_id: state.turn_id,
       metadata: %{backend: :opencode_http}

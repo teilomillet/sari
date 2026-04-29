@@ -20,6 +20,18 @@ backed by a deterministic fake backend.
 
 See [docs/sari.md](docs/sari.md).
 
+Use Sari as the merged Entr'acte app-server command with:
+
+```yaml
+agent:
+  runner: app_server
+codex:
+  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --backend fake
+```
+
+Select OpenCode or Claude Code underneath Sari with `SARI_BACKEND` while keeping
+Entr'acte on `app_server`.
+
 Profile the current facade with:
 
 ```bash

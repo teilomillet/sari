@@ -16,6 +16,12 @@ defmodule Sari.RuntimeCapabilities do
           | :command_execution
           | :cancellation
           | :token_usage
+          | :tool_calls
+          | :approval_requests
+          | :cost
+          | :cancel
+          | :workspace_mode
+          | :context_limit
 
   @type support_value :: boolean() | :degraded
 

@@ -11,12 +11,13 @@ defmodule Sari.Profile do
   alias Sari.Json
   alias Sari.Probe.ClaudeCode
   alias Sari.Probe.OpenCode
+  alias Sari.Profile.Sweep
 
   @default_concurrency_levels [1, 2, 4, 8, 16]
   @default_iterations 100
   @default_warmup_iterations 5
 
-  @type scenario :: :app_server_fake | :opencode_probe | :claude_code_probe
+  @type scenario :: :app_server_fake | :opencode_probe | :claude_code_probe | :backend_sweep
 
   @type measurement :: %{
           scenario: scenario(),
@@ -100,7 +101,20 @@ defmodule Sari.Profile do
     }
   end
 
+  defp run_scenario(:backend_sweep, opts) do
+    Sweep.run(
+      backend: Keyword.get(opts, :backend, :fake),
+      concurrency_levels: Keyword.get(opts, :concurrency_levels, @default_concurrency_levels),
+      iterations: Keyword.get(opts, :iterations, @default_iterations),
+      warmup_iterations: Keyword.get(opts, :warmup_iterations, @default_warmup_iterations),
+      prompt: Keyword.get(opts, :prompt, "Reply exactly: sari-profile-ok"),
+      backend_opts: Keyword.get(opts, :backend_opts, [])
+    )
+  end
+
   @spec format_markdown(report()) :: String.t()
+  def format_markdown(%{scenario: :backend_sweep} = report), do: Sweep.format_markdown(report)
+
   def format_markdown(%{scenario: scenario, measurements: measurements}) do
     case scenario do
       :opencode_probe -> format_opencode_markdown(scenario, measurements)

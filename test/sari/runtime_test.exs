@@ -58,4 +58,19 @@ defmodule Sari.RuntimeTest do
 
     assert Enum.map(terminals, & &1.type) == [:turn_completed, :turn_failed]
   end
+
+  test "rejects turns that exceed a configured context limit before backend execution" do
+    {:ok, session} = Runtime.start_session(Fake, %{}, session_id: "session-budget")
+
+    assert {:error, %Sari.RuntimeError{} = error} =
+             Runtime.collect_turn(Fake, session, String.duplicate("x", 100),
+               context_limit_tokens: 4,
+               reserved_output_tokens: 1
+             )
+
+    assert error.category == :context_limit_exceeded
+    assert error.backend == :fake
+    assert error.stage == :input_budget
+    assert error.details.total_tokens > error.details.limit_tokens
+  end
 end

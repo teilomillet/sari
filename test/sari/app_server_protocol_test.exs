@@ -80,6 +80,41 @@ defmodule Sari.AppServer.ProtocolTest do
            } = List.last(decoded)
   end
 
+  test "streaming turn path yields the turn response before notifications" do
+    state = Protocol.new()
+
+    {state, [thread_line]} =
+      Protocol.handle_json_line_stream(
+        state,
+        ~s({"jsonrpc":"2.0","id":2,"method":"thread/start","params":{"cwd":"/tmp/work"}})
+      )
+
+    thread_id = get_in(decode!(thread_line), ["result", "thread", "id"])
+
+    {_state, output_lines} =
+      Protocol.handle_json_line_stream(
+        state,
+        ~s({"jsonrpc":"2.0","id":3,"method":"turn/start","params":{"threadId":"#{thread_id}","input":[{"type":"text","text":"hello"}]}})
+      )
+
+    [response_line | notification_lines] = Enum.to_list(output_lines)
+
+    assert %{"id" => 3, "result" => %{"turn" => %{"id" => turn_id, "status" => "running"}}} =
+             decode!(response_line)
+
+    assert Enum.map(notification_lines, &decode!(&1)["method"]) == [
+             "turn/started",
+             "item/agentMessage/delta",
+             "thread/tokenUsage/updated",
+             "turn/completed"
+           ]
+
+    assert %{
+             "method" => "turn/completed",
+             "params" => %{"threadId" => ^thread_id, "turn" => %{"id" => ^turn_id}}
+           } = notification_lines |> List.last() |> decode!()
+  end
+
   test "accepts Entr'acte PR2 app-server request shape with policy and workspace fields" do
     state = Protocol.new()
 

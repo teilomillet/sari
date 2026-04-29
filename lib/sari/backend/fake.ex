@@ -27,7 +27,13 @@ defmodule Sari.Backend.Fake do
         filesystem: true,
         command_execution: true,
         cancellation: true,
-        token_usage: true
+        token_usage: true,
+        tool_calls: true,
+        approval_requests: true,
+        cost: true,
+        cancel: true,
+        workspace_mode: true,
+        context_limit: true
       },
       unsupported: %{},
       metadata: %{deterministic: true}

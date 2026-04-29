@@ -572,3 +572,18 @@ Use this exact structure for the persistent workpad comment and keep it updated 
 
 - <only include when something was confusing during execution>
 ````
+
+## Sari Contract And Profiling Checks
+
+For Sari runtime work, add these checks to the ticket workpad when the change
+touches the app-server facade, backend adapters, or profiling surface:
+
+```bash
+mix test test/sari/app_server_contract_fixture_test.exs
+mix sari.capabilities --format json
+mix sari.profile --scenario backend_sweep --backend fake --concurrency 1,2,4 --iterations 25
+```
+
+Use real OpenCode or Claude Code sweeps only when credentials, local model
+configuration, and spending expectations are explicit in the ticket. Always set
+a context guard when a real backend has a known limit.

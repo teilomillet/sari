@@ -1,0 +1,6 @@
+{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"contract-tools","status":"ready","metadata":{"backend":"fake","runtime":"sari","params":{"threadId":"contract-tools","cwd":"/tmp/sari-contract"}}},"cwd":"/tmp/sari-contract","model":"sari","modelProvider":"fake"}}
+{"jsonrpc":"2.0","id":2,"result":{"turn":{"id":"sari-turn-1","status":"running","items":[]}}}
+{"method":"turn/started","params":{"threadId":"contract-tools","turn":{"id":"sari-turn-1","status":"running","items":[]},"payload":{"input":"contract tools"}}}
+{"method":"sari/event","params":{"threadId":"contract-tools","turnId":"sari-turn-1","type":"tool_started","payload":{"id":"tool-1","name":"read","arguments":{"filePath":"/tmp/a"}},"metadata":{}}}
+{"method":"sari/event","params":{"threadId":"contract-tools","turnId":"sari-turn-1","type":"approval_requested","payload":{"id":"approval-1","reason":"filesystem read","tool_call_id":"tool-1"},"metadata":{}}}
+{"method":"turn/cancelled","params":{"threadId":"contract-tools","turn":{"id":"sari-turn-1","status":"cancelled","items":[]},"payload":{"reason":"contract cancellation"}}}

@@ -3,7 +3,7 @@ defmodule Sari.Runtime do
   Backend-neutral runtime entry points.
   """
 
-  alias Sari.{RuntimeCapabilities, RuntimeEvent, Session}
+  alias Sari.{PromptBudget, RuntimeCapabilities, RuntimeEvent, Session}
 
   @type backend :: module()
 
@@ -38,6 +38,9 @@ defmodule Sari.Runtime do
           {:ok, Enumerable.t()} | {:error, term()}
   def stream_turn(backend, %Session{} = session, input, opts \\ []) when is_atom(backend) do
     with :ok <- ensure_backend!(backend),
+         %RuntimeCapabilities{} = capabilities <- backend.capabilities(opts),
+         :ok <- RuntimeCapabilities.validate_required(capabilities),
+         :ok <- PromptBudget.guard(input, capabilities, opts),
          {:ok, stream} <- backend.start_turn(session, input, opts) do
       {:ok, Stream.map(stream, &normalize_event!(&1, session))}
     end

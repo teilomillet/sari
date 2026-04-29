@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd -- "$script_dir/.." && pwd)"
+
+cd "$repo_root"
+
+# Entr'acte launches the app-server command from each issue workspace. Compile
+# Sari from its own repo root first, and keep Mix chatter out of the protocol
+# stream as much as possible. Entr'acte ignores non-JSON startup lines, but the
+# steady-state protocol should still be stdout-only JSONL.
+if [[ "${SARI_COMPILE:-1}" != "0" ]]; then
+  mix compile --quiet >&2
+fi
+
+exec mix run --no-compile -e 'Sari.CLI.main(["app-server" | System.argv()])' -- "$@"

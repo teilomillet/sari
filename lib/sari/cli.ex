@@ -37,6 +37,8 @@ defmodule Sari.CLI do
           connect_timeout_ms: :integer,
           turn_timeout_ms: :integer,
           max_events: :integer,
+          context_limit: :integer,
+          reserved_output_tokens: :integer,
           no_reply: :boolean,
           model: :string,
           permission_mode: :string,
@@ -88,6 +90,16 @@ defmodule Sari.CLI do
              |> put_opt(
                :max_events,
                Keyword.get(opts, :max_events) || backend_env_int(backend, "MAX_EVENTS")
+             )
+             |> put_opt(
+               :context_limit_tokens,
+               Keyword.get(opts, :context_limit) ||
+                 backend_env_int(backend, "CONTEXT_LIMIT_TOKENS")
+             )
+             |> put_opt(
+               :reserved_output_tokens,
+               Keyword.get(opts, :reserved_output_tokens) ||
+                 backend_env_int(backend, "RESERVED_OUTPUT_TOKENS")
              )
              |> put_opt(:no_reply, Keyword.get(opts, :no_reply))
              |> put_opt(:model, Keyword.get(opts, :model) || backend_env(backend, "MODEL"))
@@ -230,7 +242,7 @@ defmodule Sari.CLI do
         IO.puts(:stderr, "stdin read failed: #{inspect(reason)}")
 
       line ->
-        {next_state, output_lines} = Protocol.handle_json_line(state, line)
+        {next_state, output_lines} = Protocol.handle_json_line_stream(state, line)
 
         Enum.each(output_lines, fn output ->
           IO.write(output)

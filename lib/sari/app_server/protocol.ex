@@ -7,7 +7,7 @@ defmodule Sari.AppServer.Protocol do
   sit in the existing workflow command slot.
   """
 
-  alias Sari.{Json, Runtime, RuntimeCapabilities, RuntimeEvent, Session}
+  alias Sari.{Json, Runtime, RuntimeCapabilities, RuntimeError, RuntimeEvent, Session}
   alias Sari.Backend.Fake
 
   @type output :: map()
@@ -40,6 +40,20 @@ defmodule Sari.AppServer.Protocol do
   @spec handle_json_line(t(), String.t()) :: {t(), [String.t()]}
   def handle_json_line(%__MODULE__{} = state, line) when is_binary(line) do
     case Json.decode(line) do
+      {:ok, message} ->
+        handle_message(state, message) |> encode_outputs()
+
+      {:error, reason} ->
+        {state, [Json.encode!(error_response(nil, :parse_error, inspect(reason)))]}
+    end
+  end
+
+  @spec handle_json_line_stream(t(), String.t()) :: {t(), Enumerable.t()}
+  def handle_json_line_stream(%__MODULE__{} = state, line) when is_binary(line) do
+    case Json.decode(line) do
+      {:ok, %{"method" => "turn/start", "id" => id} = message} ->
+        handle_turn_start_stream(state, id, message)
+
       {:ok, message} ->
         handle_message(state, message) |> encode_outputs()
 
@@ -142,6 +156,46 @@ defmodule Sari.AppServer.Protocol do
     {state, [error_response(nil, :invalid_request, "expected JSON-RPC object with method")]}
   end
 
+  defp handle_turn_start_stream(%__MODULE__{} = state, id, message) do
+    params = Map.get(message, "params", %{})
+    thread_id = Map.get(params, "threadId")
+    input = Map.get(params, "input", [])
+
+    with %Session{} = session <- Map.get(state.sessions, thread_id) do
+      turn_id = "sari-turn-#{state.next_turn}"
+
+      case Runtime.stream_turn(
+             state.backend,
+             session,
+             input,
+             Keyword.put(state.backend_opts, :turn_id, turn_id)
+           ) do
+        {:ok, stream} ->
+          response = result_response(id, %{"turn" => turn_payload(turn_id, "running")})
+
+          notifications =
+            Stream.map(
+              stream,
+              &(&1 |> event_to_notification(session.id, turn_id) |> Json.encode!())
+            )
+
+          {%{state | next_turn: state.next_turn + 1},
+           Stream.concat([Json.encode!(response)], notifications)}
+
+        {:error, reason} ->
+          {state, [Json.encode!(error_response(id, :turn_start_failed, inspect(reason)))]}
+      end
+    else
+      nil ->
+        {state,
+         [
+           Json.encode!(
+             error_response(id, :unknown_thread, "thread not found: #{inspect(thread_id)}")
+           )
+         ]}
+    end
+  end
+
   defp encode_outputs({state, outputs}) do
     {state, Enum.map(outputs, &Json.encode!/1)}
   end
@@ -154,13 +208,16 @@ defmodule Sari.AppServer.Protocol do
     }
   end
 
-  defp error_response(id, code, message) do
+  defp error_response(id, code, reason) do
+    normalized = RuntimeError.normalize(reason, category: code)
+
     %{
       "jsonrpc" => "2.0",
       "id" => id,
       "error" => %{
         "code" => Atom.to_string(code),
-        "message" => message
+        "message" => normalized.message,
+        "data" => RuntimeError.to_payload(normalized)
       }
     }
   end
@@ -203,6 +260,7 @@ defmodule Sari.AppServer.Protocol do
   defp event_to_notification(%RuntimeEvent{type: :token_usage} = event, thread_id, _turn_id) do
     %{
       "method" => "thread/tokenUsage/updated",
+      "usage" => event.payload,
       "params" => %{
         "threadId" => thread_id,
         "usage" => event.payload

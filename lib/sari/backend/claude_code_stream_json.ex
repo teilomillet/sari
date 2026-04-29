@@ -21,14 +21,14 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
 
   import Bitwise, only: [band: 2, bor: 2]
 
-  alias Sari.{Json, RuntimeCapabilities, RuntimeEvent, Session}
+  alias Sari.{Json, RuntimeCapabilities, RuntimeError, RuntimeEvent, Session}
 
   @default_turn_timeout_ms 300_000
   @default_max_events 2_000
   @active_turns_table __MODULE__.ActiveTurns
 
   @impl true
-  def capabilities(_opts \\ []) do
+  def capabilities(opts \\ []) do
     %RuntimeCapabilities{
       backend: :claude_code_stream_json,
       name: "Claude Code stream-json",
@@ -42,15 +42,24 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
         filesystem: true,
         command_execution: true,
         cancellation: :degraded,
-        token_usage: true
+        token_usage: true,
+        tool_calls: true,
+        approval_requests: :degraded,
+        cost: true,
+        cancel: :degraded,
+        workspace_mode: true,
+        context_limit: :degraded
       },
       unsupported: %{
         approvals: :requires_permission_prompt_tool_or_hooks,
         dynamic_tools: :requires_mcp_mapping,
-        resident_process: :requires_sari_stop_session_callback
+        resident_process: :requires_sari_stop_session_callback,
+        approval_requests: :requires_permission_prompt_tool_or_hooks,
+        context_limit: :configured_by_model_or_sari_context_limit_tokens
       },
       metadata: %{
         command: "claude -p --output-format stream-json",
+        context_limit_tokens: Keyword.get(opts, :context_limit_tokens),
         docs: [
           "https://code.claude.com/docs/en/cli-reference",
           "https://code.claude.com/docs/en/agent-sdk/streaming-output",
@@ -144,6 +153,7 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
           turn_id: turn_id,
           opts: opts,
           port: nil,
+          stderr_path: stderr_path(session, turn_id),
           pending_line: "",
           event_count: 0,
           max_events: Keyword.get(opts, :max_events, @default_max_events),
@@ -199,20 +209,23 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
 
       {^port, {:exit_status, status}} ->
         state = flush_pending_line(state)
+        stderr = stderr_excerpt(state)
         cleanup_active_turn(state)
 
         event =
           if status == 0 do
             turn_completed_event(state, %{reason: :process_exit, exit_status: status})
           else
-            turn_failed_event(state, {:process_exit, status})
+            turn_failed_event(state, {:process_exit, status, stderr})
           end
 
         {[event], %{state | phase: :done, port: nil}}
     after
       timeout_ms ->
+        stderr = stderr_excerpt(state)
         close_port(port)
-        failed = turn_failed_event(state, :turn_timeout)
+        cleanup_active_turn(state)
+        failed = turn_failed_event(state, {:turn_timeout, timeout_ms, stderr})
         {[failed], %{state | phase: :done, port: nil}}
     end
   end
@@ -222,7 +235,7 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
          {:ok, shell} <- shell_executable(),
          :ok <- validate_cwd(state.session.cwd) do
       try do
-        command = shell_command([executable | command_args(state)])
+        command = shell_command([executable | command_args(state)], state.stderr_path)
 
         port =
           Port.open(
@@ -619,7 +632,9 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
   end
 
   defp turn_failed_event(state, reason) do
-    RuntimeEvent.new(:turn_failed, %{reason: reason},
+    error = RuntimeError.normalize(reason, backend: :claude_code_stream_json, stage: :turn)
+
+    RuntimeEvent.new(:turn_failed, RuntimeError.to_payload(error),
       session_id: state.session.id,
       turn_id: state.turn_id,
       metadata: %{backend: :claude_code_stream_json}
@@ -636,8 +651,10 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
   defp cleanup_turn_stream(%{port: port} = state) when is_port(port) do
     cleanup_active_turn(state)
     close_port(port)
+    cleanup_stderr(state)
   end
 
+  defp cleanup_turn_stream(%{stderr_path: _path} = state), do: cleanup_stderr(state)
   defp cleanup_turn_stream(_state), do: :ok
 
   defp cleanup_active_turn(state) do
@@ -734,16 +751,41 @@ defmodule Sari.Backend.ClaudeCodeStreamJson do
     Map.reject(map, fn {_key, value} -> is_nil(value) end)
   end
 
-  defp shell_command(argv) do
-    argv
-    |> Enum.map_join(" ", &shell_escape/1)
-    |> Kernel.<>(" < /dev/null")
+  defp shell_command(argv, stderr_path) do
+    command = Enum.map_join(argv, " ", &shell_escape/1)
+    command <> " < /dev/null 2> " <> shell_escape(stderr_path)
   end
 
   defp shell_escape(value) do
     value = to_string(value)
     "'" <> String.replace(value, "'", "'\"'\"'") <> "'"
   end
+
+  defp stderr_path(%Session{} = session, turn_id) do
+    safe_session = session.id |> to_string() |> String.replace(~r/[^A-Za-z0-9_.-]+/, "_")
+    safe_turn = turn_id |> to_string() |> String.replace(~r/[^A-Za-z0-9_.-]+/, "_")
+
+    Path.join(
+      System.tmp_dir!(),
+      "sari-claude-#{safe_session}-#{safe_turn}-#{System.unique_integer([:positive])}.stderr"
+    )
+  end
+
+  defp stderr_excerpt(%{stderr_path: path}) when is_binary(path) do
+    case File.read(path) do
+      {:ok, content} -> content |> String.trim() |> String.slice(0, 2_000)
+      {:error, _reason} -> nil
+    end
+  end
+
+  defp stderr_excerpt(_state), do: nil
+
+  defp cleanup_stderr(%{stderr_path: path}) when is_binary(path) do
+    _ = File.rm(path)
+    :ok
+  end
+
+  defp cleanup_stderr(_state), do: :ok
 
   defp claude_session_id(value) when is_binary(value) do
     if uuid?(value), do: value, else: uuid_v4()

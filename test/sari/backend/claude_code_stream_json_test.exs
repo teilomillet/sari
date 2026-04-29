@@ -127,6 +127,48 @@ defmodule Sari.Backend.ClaudeCodeStreamJsonTest do
     end)
   end
 
+  test "keeps Claude stderr out of JSONL parsing and reports it on process failure" do
+    with_tmp(fn tmp ->
+      success_trace = Path.join(tmp, "claude-success.args")
+      stderr_success = fake_claude!(tmp, success_trace, :stderr_success)
+
+      assert {:ok, session} =
+               Runtime.start_session(ClaudeCodeStreamJson, %{"cwd" => tmp},
+                 executable: stderr_success
+               )
+
+      assert {:ok, success} =
+               Runtime.collect_turn(ClaudeCodeStreamJson, session, "stderr ok",
+                 executable: stderr_success,
+                 turn_id: "claude-stderr-ok",
+                 turn_timeout_ms: 1_000
+               )
+
+      assert success.terminal.type == :turn_completed
+      refute Enum.any?(success.events, &(&1.type == :error))
+
+      error_trace = Path.join(tmp, "claude-error.args")
+      stderr_error = fake_claude!(tmp, error_trace, :stderr_error)
+
+      assert {:ok, error_session} =
+               Runtime.start_session(ClaudeCodeStreamJson, %{"cwd" => tmp},
+                 executable: stderr_error
+               )
+
+      assert {:ok, failed} =
+               Runtime.collect_turn(ClaudeCodeStreamJson, error_session, "stderr fail",
+                 executable: stderr_error,
+                 turn_id: "claude-stderr-fail",
+                 turn_timeout_ms: 1_000
+               )
+
+      assert failed.terminal.type == :turn_failed
+      assert failed.terminal.payload.category == :process_exit
+      assert failed.terminal.payload.details.exit_status == 42
+      assert failed.terminal.payload.details.stderr =~ "stderr-only failure"
+    end)
+  end
+
   test "surfaces executable and cwd startup failures" do
     with_tmp(fn tmp ->
       missing = Path.join(tmp, "missing-claude")
@@ -178,6 +220,18 @@ defmodule Sari.Backend.ClaudeCodeStreamJsonTest do
         :error ->
           """
           printf '{"type":"result","subtype":"error","is_error":true,"session_id":"claude-fake-session","result":"permission denied","usage":{"input_tokens":5,"output_tokens":1},"total_cost_usd":0.001}\\n'
+          """
+
+        :stderr_success ->
+          """
+          printf 'debug stderr that is not json\n' >&2
+          printf '{"type":"result","subtype":"success","is_error":false,"session_id":"claude-fake-session","result":"ok from stdout","usage":{"input_tokens":1,"output_tokens":1}}\n'
+          """
+
+        :stderr_error ->
+          """
+          printf 'stderr-only failure\n' >&2
+          exit 42
           """
       end
 

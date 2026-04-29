@@ -39,3 +39,43 @@ defmodule Sari.RuntimeCapabilitiesTest do
     assert RuntimeCapabilities.unsupported_reason(capabilities, :dynamic_tools)
   end
 end
+
+defmodule Sari.CapabilityMatrixTest do
+  use ExUnit.Case, async: true
+
+  alias Sari.CapabilityMatrix
+
+  test "reports the consumer-facing backend capability matrix" do
+    report = CapabilityMatrix.report(context_limit_tokens: 8_192)
+
+    assert CapabilityMatrix.matrix_capabilities() == [
+             :streaming,
+             :tool_calls,
+             :approval_requests,
+             :token_usage,
+             :cost,
+             :resume,
+             :cancel,
+             :workspace_mode,
+             :context_limit
+           ]
+
+    assert Enum.map(report.rows, & &1.backend) == [
+             "codex_app_server",
+             "fake",
+             "opencode_http",
+             "claude_code_stream_json"
+           ]
+
+    opencode = Enum.find(report.rows, &(&1.backend == "opencode_http"))
+    assert opencode.capabilities.streaming == true
+    assert opencode.capabilities.approval_requests == :degraded
+    assert opencode.capabilities.cost == false
+    assert opencode.capabilities.context_limit == :degraded
+    assert opencode.metadata.context_limit_tokens == 8_192
+
+    markdown = CapabilityMatrix.format_markdown(report)
+    assert markdown =~ "| codex_app_server | stdio_jsonrpc | false | reference |"
+    assert markdown =~ "| opencode_http | http_sse | true | yes | yes | degraded |"
+  end
+end

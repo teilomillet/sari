@@ -174,33 +174,50 @@ Verified output on 2026-04-29 included:
 - terminal event: `turn_completed`
 - elapsed time: `16689 ms`
 
-## Entr'acte PR #2 Compatibility
+## Entr'acte Runtime Compatibility
 
-Entr'acte PR #2 keeps the existing app-server runner and adds a typed
-`AgentRuntime` dispatch between `app_server` and `headless`. Sari should plug
-into the `app_server` path because that path still speaks JSON-RPC over stdio
-and preserves streaming notifications, approvals, dynamic tools, and terminal
-turn events. The `headless` runner is useful for command-style CLIs, but it
-collapses the runtime to process output and exit status.
+`teilomillet/entracte#2` has landed. The merged runtime surface keeps
+`agent.runner=app_server` for JSON-RPC stdio app-server processes and adds
+`agent.runner=headless` for plain commands. Sari should plug into the
+`app_server` path because that path preserves streaming notifications,
+approvals, dynamic tools, token usage, and terminal turn events. The `headless`
+runner is useful for command-style CLIs, but it collapses the runtime to process
+output and exit status.
 
-Configure Sari as the app-server command by selecting the OpenCode backend:
+Entr'acte launches the app-server command from the issue workspace, so Sari ships
+`scripts/sari_app_server` as a repo-root wrapper. The wrapper changes back to the
+Sari repository, compiles quietly when needed, and starts `Sari.CLI` on stdin and
+stdout.
 
-```bash
-cd /Users/teilomillet/Code/sari
-mix run -e 'Sari.CLI.main(["app-server", "--backend", "opencode_http", "--base-url", "http://127.0.0.1:41888"])'
+Configure Sari as the merged Entr'acte app-server command:
+
+```yaml
+agent:
+  runner: app_server
+codex:
+  command: /Users/teilomillet/Code/sari/scripts/sari_app_server --backend fake
 ```
 
-For Claude Code, select the Claude backend. The current implementation launches
-one Claude Code `stream-json` subprocess per turn and uses `--session-id` or
-`--resume` for Claude's session identity:
+OpenCode through Sari:
 
-```bash
-cd /Users/teilomillet/Code/sari
-mix run -e 'Sari.CLI.main(["app-server", "--backend", "claude_code_stream_json"])'
+```yaml
+agent:
+  runner: app_server
+codex:
+  command: SARI_BACKEND=opencode_http SARI_OPENCODE_BASE_URL=http://127.0.0.1:41888 /Users/teilomillet/Code/sari/scripts/sari_app_server
 ```
 
-For a repeatable local smoke, start OpenCode with LM Studio and run the PR #2
-request sequence against Sari app-server:
+Claude Code through Sari:
+
+```yaml
+agent:
+  runner: app_server
+codex:
+  command: SARI_BACKEND=claude_code_stream_json /Users/teilomillet/Code/sari/scripts/sari_app_server
+```
+
+For a repeatable local smoke, start OpenCode with LM Studio and run the merged
+Entr'acte request sequence against Sari app-server:
 
 ```bash
 OPENCODE_CONFIG=$PWD/opencode.lmstudio.json \
@@ -210,13 +227,17 @@ SARI_OPENCODE_BASE_URL=http://127.0.0.1:41888 \
   mix run scripts/sari_app_server_entracte_pr2_smoke.exs
 ```
 
-Run the same PR #2 request sequence against Claude Code:
+Run the same request sequence against Claude Code:
 
 ```bash
 SARI_BACKEND=claude_code_stream_json \
 SARI_ENTRACTE_PROMPT="Reply exactly: sari-claude-ok" \
   mix run scripts/sari_app_server_entracte_pr2_smoke.exs
 ```
+
+Entr'acte now has a regression test proving the merged app-server runner accepts
+a Sari-compatible command through `codex.command` and receives Sari thread,
+turn, token-usage, and terminal notifications.
 
 Verified output on 2026-04-29:
 
@@ -226,3 +247,86 @@ Verified output on 2026-04-29:
 - assistant text: `sari-app-server-ok`
 - token usage: input `7088`, output `9`, total `7097`
 - elapsed time: `1297 ms`
+
+## Contract Fixtures And Capability Matrix
+
+
+Sari now pins the app-server facade with golden JSONL fixtures under
+`test/fixtures/app_server_contract`. The fixtures cover the stable consumer
+surface we need before plugging deeper into Entr'acte:
+
+- initialize and initialized handshake
+- thread start
+- turn start
+- assistant deltas
+- token usage
+- terminal completion
+- fail-closed unknown-thread errors
+- tool events, approval requests, and cancellation
+
+Run only those fixtures with:
+
+```bash
+mix test test/sari/app_server_contract_fixture_test.exs
+```
+
+The backend matrix is generated from the backend declarations plus the external
+Codex app-server reference row:
+
+```bash
+mix sari.capabilities
+mix sari.capabilities --format json
+```
+
+The matrix answers the concrete Entr'acte questions for each backend:
+streaming, tool calls, approval requests, token usage, cost, resume, cancel,
+workspace mode, and context-limit handling. `codex_app_server` is intentionally
+marked as `implemented: false` in Sari because it is the external compatibility
+reference Entr'acte already consumes, not a Sari adapter we need to refit now.
+
+## Backend Hardening
+
+Sari has a fail-fast prompt budget guard. It only blocks a turn when a context
+limit is configured, because exact model limits are deployment-specific for LM
+Studio/OpenCode and model-specific for Claude Code. The estimate is conservative
+and local: roughly one token per four UTF-8 bytes plus structure overhead.
+
+App-server CLI examples:
+
+```bash
+mix run -e 'Sari.CLI.main(["app-server", "--backend", "opencode_http", "--context-limit", "8192", "--reserved-output-tokens", "512"])'
+
+mix run -e 'Sari.CLI.main(["app-server", "--backend", "claude_code_stream_json", "--context-limit", "200000", "--reserved-output-tokens", "1024"])'
+```
+
+OpenCode turns now have both per-event and whole-turn timeout policy, and failed
+turn events use the normalized Sari error envelope. Claude Code turns redirect
+stderr away from JSONL stdout, include stderr excerpts on process failures, and
+clean up active turn state and stderr temp files on success, failure, timeout,
+or interruption.
+
+## Backend Sweep Profiling
+
+Use `backend_sweep` for USL-ready repeated measurements that include startup,
+first assistant token, full turn, memory delta, reductions, concurrency, and
+failure rate:
+
+```bash
+mix sari.profile --scenario backend_sweep --backend fake --concurrency 1,2,4,8 --iterations 100
+```
+
+Real backend sweeps are opt-in because they can spend model tokens:
+
+```bash
+SARI_OPENCODE_BASE_URL=http://127.0.0.1:41888 \
+  mix sari.profile --scenario backend_sweep --backend opencode_http \
+  --context-limit 8192 --reserved-output-tokens 512 --iterations 1
+
+mix sari.profile --scenario backend_sweep --backend claude_code_stream_json \
+  --context-limit 200000 --reserved-output-tokens 1024 --iterations 1
+```
+
+Interpretation rule: use the fake backend for Sari core overhead, OpenCode for
+HTTP/SSE server behavior, and Claude Code for subprocess JSONL behavior. Do not
+compare those numbers as if they measure the same bottleneck; they isolate
+different parts of the stack.

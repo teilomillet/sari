@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"threadId":"contract-tools","cwd":"/tmp/sari-contract"}}
+{"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"contract-tools","input":"contract tools"}}
