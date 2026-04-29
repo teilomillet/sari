@@ -1,0 +1,5 @@
+[runner]
+workflow = "WORKFLOW.md"
+env_file = ".env"
+logs_root = "log"
+port = 4001
