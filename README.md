@@ -18,7 +18,8 @@ Claude Code, and future RS backends look like the same runtime to orchestration.
 The current scaffold includes a bounded app-server-compatible protocol facade
 backed by a deterministic fake backend.
 
-See [docs/sari.md](docs/sari.md).
+See [docs/sari.md](docs/sari.md). The prioritized feature roadmap lives in
+[docs/roadmap.md](docs/roadmap.md).
 
 Use Sari as the merged Entr'acte app-server command with:
 
