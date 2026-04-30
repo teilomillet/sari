@@ -2,7 +2,7 @@ defmodule Sari.AppServer.ProtocolTest do
   use ExUnit.Case, async: true
 
   alias Sari.AppServer.Protocol
-  alias Sari.Json
+  alias Sari.{Json, RuntimeEvent}
 
   test "handles initialize as a JSON-RPC response" do
     state = Protocol.new()
@@ -216,6 +216,176 @@ defmodule Sari.AppServer.ProtocolTest do
     {_state, [line]} = Protocol.handle_json_line(Protocol.new(), "{")
 
     assert %{"id" => nil, "error" => %{"code" => "parse_error"}} = decode!(line)
+  end
+
+  test "tool_started event maps to item/started notification" do
+    state =
+      Protocol.new(
+        backend_opts: [
+          events: [
+            RuntimeEvent.new(:turn_started, %{input: "test"}),
+            RuntimeEvent.new(:tool_started, %{
+              id: "tool-abc",
+              name: "bash",
+              arguments: %{"command" => "ls"}
+            }),
+            RuntimeEvent.new(:turn_completed, %{result: "ok"})
+          ]
+        ]
+      )
+
+    {state, [thread_line]} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/tmp"}})
+      )
+
+    thread_id = get_in(decode!(thread_line), ["result", "thread", "id"])
+
+    {_state, output_lines} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"#{thread_id}","input":[]}})
+      )
+
+    decoded = Enum.map(output_lines, &decode!/1)
+    item_started = Enum.find(decoded, &(&1["method"] == "item/started"))
+
+    assert %{
+             "method" => "item/started",
+             "params" => %{
+               "threadId" => ^thread_id,
+               "item" => %{
+                 "id" => "tool-abc",
+                 "type" => "tool_call",
+                 "name" => "bash",
+                 "arguments" => %{"command" => "ls"}
+               }
+             }
+           } = item_started
+  end
+
+  test "tool_output event maps to item/commandExecution/outputDelta notification" do
+    state =
+      Protocol.new(
+        backend_opts: [
+          events: [
+            RuntimeEvent.new(:turn_started, %{input: "test"}),
+            RuntimeEvent.new(:tool_output, %{
+              tool_call_id: "tool-1",
+              output: "file contents here"
+            }),
+            RuntimeEvent.new(:turn_completed, %{result: "ok"})
+          ]
+        ]
+      )
+
+    {state, [thread_line]} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/tmp"}})
+      )
+
+    thread_id = get_in(decode!(thread_line), ["result", "thread", "id"])
+
+    {_state, output_lines} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"#{thread_id}","input":[]}})
+      )
+
+    decoded = Enum.map(output_lines, &decode!/1)
+    output_delta = Enum.find(decoded, &(&1["method"] == "item/commandExecution/outputDelta"))
+
+    assert %{
+             "method" => "item/commandExecution/outputDelta",
+             "params" => %{
+               "threadId" => ^thread_id,
+               "itemId" => "tool-1",
+               "delta" => "file contents here"
+             }
+           } = output_delta
+  end
+
+  test "approval_requested event maps to item/commandExecution/requestApproval notification" do
+    state =
+      Protocol.new(
+        backend_opts: [
+          events: [
+            RuntimeEvent.new(:turn_started, %{input: "test"}),
+            RuntimeEvent.new(:approval_requested, %{
+              id: "appr-1",
+              reason: "write to /etc",
+              tool_call_id: "tool-xyz"
+            }),
+            RuntimeEvent.new(:turn_cancelled, %{reason: "user cancelled"})
+          ]
+        ]
+      )
+
+    {state, [thread_line]} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/tmp"}})
+      )
+
+    thread_id = get_in(decode!(thread_line), ["result", "thread", "id"])
+
+    {_state, output_lines} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"#{thread_id}","input":[]}})
+      )
+
+    decoded = Enum.map(output_lines, &decode!/1)
+
+    approval =
+      Enum.find(decoded, &(&1["method"] == "item/commandExecution/requestApproval"))
+
+    assert %{
+             "method" => "item/commandExecution/requestApproval",
+             "params" => %{
+               "threadId" => ^thread_id,
+               "itemId" => "appr-1",
+               "reason" => "write to /etc",
+               "toolCallId" => "tool-xyz"
+             }
+           } = approval
+  end
+
+  test "unknown events still fall back to sari/event" do
+    state =
+      Protocol.new(
+        backend_opts: [
+          events: [
+            RuntimeEvent.new(:turn_started, %{input: "test"}),
+            RuntimeEvent.new(:reasoning_delta, %{text: "thinking..."}),
+            RuntimeEvent.new(:turn_completed, %{result: "ok"})
+          ]
+        ]
+      )
+
+    {state, [thread_line]} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":1,"method":"thread/start","params":{"cwd":"/tmp"}})
+      )
+
+    thread_id = get_in(decode!(thread_line), ["result", "thread", "id"])
+
+    {_state, output_lines} =
+      Protocol.handle_json_line(
+        state,
+        ~s({"jsonrpc":"2.0","id":2,"method":"turn/start","params":{"threadId":"#{thread_id}","input":[]}})
+      )
+
+    decoded = Enum.map(output_lines, &decode!/1)
+    sari_event = Enum.find(decoded, &(&1["method"] == "sari/event"))
+
+    assert %{
+             "method" => "sari/event",
+             "params" => %{"type" => "reasoning_delta"}
+           } = sari_event
   end
 
   defp decode!(line) do

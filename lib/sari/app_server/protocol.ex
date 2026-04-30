@@ -301,6 +301,53 @@ defmodule Sari.AppServer.Protocol do
     }
   end
 
+  defp event_to_notification(%RuntimeEvent{type: :tool_started} = event, thread_id, turn_id) do
+    %{
+      "method" => "item/started",
+      "params" => %{
+        "threadId" => thread_id,
+        "turnId" => turn_id,
+        "item" => %{
+          "id" => Map.get(event.payload, :id) || Map.get(event.payload, "id"),
+          "type" => "tool_call",
+          "name" => Map.get(event.payload, :name) || Map.get(event.payload, "name"),
+          "arguments" =>
+            Map.get(event.payload, :arguments) || Map.get(event.payload, "arguments") || %{}
+        }
+      }
+    }
+  end
+
+  defp event_to_notification(%RuntimeEvent{type: :tool_output} = event, thread_id, turn_id) do
+    item_id =
+      Map.get(event.payload, :tool_call_id) || Map.get(event.payload, "tool_call_id") ||
+        Map.get(event.payload, :id) || Map.get(event.payload, "id")
+
+    %{
+      "method" => "item/commandExecution/outputDelta",
+      "params" => %{
+        "threadId" => thread_id,
+        "turnId" => turn_id,
+        "itemId" => item_id,
+        "delta" => Map.get(event.payload, :output) || Map.get(event.payload, "output") || ""
+      }
+    }
+  end
+
+  defp event_to_notification(%RuntimeEvent{type: :approval_requested} = event, thread_id, turn_id) do
+    %{
+      "method" => "item/commandExecution/requestApproval",
+      "params" => %{
+        "threadId" => thread_id,
+        "turnId" => turn_id,
+        "itemId" => Map.get(event.payload, :id) || Map.get(event.payload, "id"),
+        "reason" => Map.get(event.payload, :reason) || Map.get(event.payload, "reason"),
+        "toolCallId" =>
+          Map.get(event.payload, :tool_call_id) || Map.get(event.payload, "tool_call_id")
+      }
+    }
+  end
+
   defp event_to_notification(%RuntimeEvent{} = event, thread_id, turn_id) do
     %{
       "method" => "sari/event",
